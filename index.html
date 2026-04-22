@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>tictactoe</title>
+<!-- PeerJS Library for Online Play -->
+<script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+<style>
+  /* --- 1. DYNAMIC THEME ENGINE --- */
+  :root {
+    --primary: #d900ff;      
+    --secondary: #8c00ff;
+    --alert: #ff0055;
+    --bg-grad-1: #1a0024;
+    --bg-grad-2: #05000a;
+    --glass-bg: rgba(40, 10, 50, 0.3);
+    --glass-border: rgba(217, 0, 255, 0.3);
+    --font: 'Courier New', Courier, monospace;
+  }
+
+  body.dev-mode {
+    --primary: #00ff41;
+    --secondary: #008F11;
+    --glass-bg: rgba(0, 20, 0, 0.9);
+    --glass-border: #00ff41;
+  }
+
+  body {
+    margin: 0; height: 100vh; overflow: hidden;
+    background-color: #000;
+    background-image: radial-gradient(circle at 50% 50%, var(--bg-grad-1) 0%, var(--bg-grad-2) 100%);
+    color: #fff; font-family: var(--font);
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.5s ease;
+  }
+
+  #matrix-canvas {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    z-index: 0; opacity: 0; transition: opacity 1s; pointer-events: none;
+  }
+  body.dev-mode #matrix-canvas { opacity: 0.3; }
+
+  /* --- 2. UI COMPONENTS --- */
+  button {
+    border: none; color: #000; font-weight: bold; cursor: pointer;
+    letter-spacing: 2px; font-family: inherit; position: relative;
+    transition: all 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
+    overflow: hidden; z-index: 1;
+  }
+  button:hover {
+    transform: scale(1.05) translateY(-2px);
+    border-radius: 25px; 
+    box-shadow: 0 0 25px var(--primary), 0 0 50px var(--secondary);
+  }
+  button:active { transform: scale(0.95); }
+
+  .game-wrapper {
+    display: flex; gap: 20px; position: relative; z-index: 10;
+    transition: transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+    transform: translateX(0);
+  }
+  @media (min-width: 769px) {
+    body.dev-mode .game-wrapper { transform: translateX(-160px); }
+  }
+
+  .game-container {
+    display: flex; flex-direction: column; align-items: center; gap: 15px;
+    opacity: 0; pointer-events: none; transition: opacity 1s;
+  }
+
+  .status-bar {
+    display: flex; justify-content: space-between; align-items: center;
+    width: 320px; padding: 12px;
+    background: var(--glass-bg);
+    border: 1px solid var(--primary);
+    border-radius: 12px; backdrop-filter: blur(10px);
+    box-shadow: 0 0 15px var(--secondary);
+    font-size: 0.8rem;
+    transition: border-color 0.3s, box-shadow 0.3s;
+  }
+
+  .mode-btn {
+    padding: 6px 12px; font-size: 0.7rem;
+    background: var(--secondary); color: #fff; border-radius: 4px; 
+  }
+
+  .history-link {
+    text-decoration: underline; cursor: pointer; color: var(--primary);
+    font-weight: bold; margin-left: 10px; text-shadow: 0 0 5px var(--primary);
+  }
+
+  .board {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
+    padding: 15px; background: var(--glass-bg);
+    border-radius: 20px; border: 1px solid var(--primary);
+    box-shadow: 0 0 40px var(--secondary);
+    transition: border-color 0.3s, box-shadow 0.3s;
+    position: relative;
+  }
+
+  .cell {
+    width: 85px; height: 85px;
+    background: rgba(0,0,0,0.4); border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 3rem; cursor: pointer; transition: all 0.3s;
+    border: 1px solid transparent; text-shadow: 0 0 10px currentColor;
+  }
+  .cell:hover { background: rgba(255,255,255,0.1); box-shadow: inset 0 0 20px var(--primary); }
+  .cell.x { color: var(--primary); text-shadow: 0 0 25px var(--primary); }
+  .cell.o { color: #fff; text-shadow: 0 0 25px #fff; }
+
+  .replay-overlay, .online-overlay {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.2); border-radius: 20px;
+    display: none; align-items: flex-start; justify-content: center;
+    z-index: 20; pointer-events: none;
+  }
+  .overlay-text {
+    color: #fff; background: var(--alert); padding: 5px 15px;
+    border-radius: 5px; font-weight: bold; font-size: 0.9rem;
+    box-shadow: 0 0 20px var(--alert); animation: pulse 1.5s infinite;margin-top: 20px
+  }
+  @keyframes pulse { 0%{opacity:0.4} 50%{opacity:0.7} 100%{opacity:0.4} }
+
+  /* --- 3. ONLINE LOBBY UI --- */
+  #online-modal {
+    display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.9); z-index: 150;
+    align-items: center; justify-content: center; flex-direction: column;
+  }
+  
+  .lobby-box {
+    background: rgba(10, 10, 20, 0.95); border: 1px solid var(--primary);
+    padding: 30px; border-radius: 15px; text-align: center;
+    box-shadow: 0 0 40px var(--secondary); width: 300px;
+  }
+  
+  .lobby-code-display {
+    font-size: 2rem; letter-spacing: 5px; color: var(--primary);
+    margin: 20px 0; padding: 10px; border: 1px dashed var(--secondary);
+    font-family: monospace; background: rgba(0,0,0,0.5);
+  }
+  
+  .lobby-input {
+    background: #000; border: 1px solid var(--primary); color: #fff;
+    padding: 10px; font-size: 1.2rem; letter-spacing: 3px; text-align: center;
+    width: 80%; margin-bottom: 10px; outline: none;
+  }
+
+  /* --- 4. DEV & AUTH UI --- */
+  #dev-panel {
+    position: fixed; top: 0; bottom: 0; right: 0; width: 340px; 
+    background: rgba(10, 10, 10, 0.98); border-left: 2px solid var(--primary);
+    box-shadow: -10px 0 50px rgba(0,0,0, 0.5); padding: 20px; 
+    display: flex; flex-direction: column; gap: 20px;
+    transform: translateX(100%); transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    z-index: 2000;
+  }
+  body.dev-mode #dev-panel { transform: translateX(0); }
+  @media (max-width: 768px) { #dev-panel { width: 100%; } }
+
+  .dev-header { font-size: 1.5rem; color: var(--primary); border-bottom: 1px solid var(--primary); padding-bottom: 10px; margin-bottom: 5px; }
+  .dev-content { flex-grow: 1; display: flex; flex-direction: column; gap: 25px; overflow-y: auto; }
+  .dev-section { border-bottom: 1px solid #333; padding-bottom: 15px; display: flex; flex-direction: column; gap: 10px; }
+  .dev-label { color: #fff; font-size: 0.7rem; opacity: 0.8; text-transform: uppercase; letter-spacing: 1px; }
+  
+  .color-picker-wrapper { display: flex; gap: 10px; align-items: center; background: rgba(255,255,255,0.05); padding: 10px; border-radius: 8px; border: 1px solid var(--glass-border); }
+  input[type="color"] { -webkit-appearance: none; border: none; width: 40px; height: 40px; cursor: pointer; background: none; padding: 0; }
+  
+  .dev-slider { width: 100%; height: 5px; accent-color: var(--primary); background: #333; border-radius: 5px; }
+  .dev-btn { background: rgba(255,255,255, 0.05); border: 1px solid var(--primary); color: var(--primary); padding: 12px; width: 100%; text-align: center; font-size: 0.8rem; }
+  .dev-btn:hover { background: var(--primary); color: #000; }
+
+  .console-wrapper { background: #050505; border: 1px solid #333; padding: 10px; border-radius: 6px; display: flex; flex-direction: column; }
+  #neural-log { height: 140px; overflow-y: auto; font-family: 'Consolas', monospace; font-size: 0.7rem; line-height: 1.5; }
+  .log-info { color: #00f3ff; } .log-warn { color: #ffcc00; } .log-danger { color: #ff0055; } .log-success { color: #00ff41; } .log-dim { color: #666; }
+
+  #auth-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 999; display: flex; justify-content: center; align-items: center; }
+  .glass-panel { background: rgba(20, 20, 20, 0.8); border: 1px solid var(--primary); box-shadow: 0 0 40px var(--secondary); padding: 2rem; border-radius: 20px; width: 300px; text-align: center; transition: border-color 0.3s, box-shadow 0.3s; }
+  input[type="text"], input[type="password"] { background: rgba(0,0,0,0.5); border: 1px solid #555; color: var(--primary); padding: 12px; width: 90%; margin-bottom: 10px; border-radius: 5px; outline: none; }
+  button.auth-btn { width: 100%; padding: 12px; background: var(--primary); border: none; margin-top: 10px; border-radius: 5px; }
+
+  #dev-prompt-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 3000; align-items: center; justify-content: center; flex-direction: column; }
+  .cmd-input { background: #000; border: 1px solid var(--primary); color: var(--primary); width: 80%; max-width: 400px; padding: 15px; text-align: center; font-size: 1.5rem; letter-spacing: 5px; box-shadow: 0 0 30px var(--secondary); margin-bottom: 20px; }
+  
+  #win-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 100; align-items: center; justify-content: center; flex-direction: column; }
+  #history-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.95); z-index: 200; align-items: center; justify-content: center; flex-direction: column; }
+  .history-list { width: 90%; max-width: 400px; height: 50vh; overflow-y: auto; background: rgba(20,20,20,0.9); border: 1px solid var(--primary); border-radius: 15px; padding: 20px; box-shadow: 0 0 30px var(--secondary); }
+  .history-item { display: flex; justify-content: space-between; padding: 12px; margin-bottom: 8px; background: rgba(255,255,255,0.05); border-left: 3px solid var(--primary); cursor: pointer; }
+  
+  #ai-stat-container { display: none; color: var(--primary); font-weight: bold; }
+  body.dev-mode #ai-stat-container { display: inline; }
+
+  @keyframes shake { 0%{transform:translateX(0)} 25%{transform:translateX(-5px)} 75%{transform:translateX(5px)} 100%{transform:translateX(0)} }
+  .error-shake { animation: shake 0.3s; border-color: red !important; }
+</style>
+</head>
+<body>
+
+<canvas id="matrix-canvas"></canvas>
+
+<!-- HIDDEN DEV PROMPT -->
+<div id="dev-prompt-modal">
+  <input type="password" id="dev-cmd" class="cmd-input" placeholder="ACCESS CODE" onkeydown="checkDevPass(event)">
+  <button class="mode-btn" style="padding: 10px 30px;" onclick="closeDevPrompt()">[ X ] CLOSE</button>
+</div>
+
+<!-- LOGIN -->
+<div id="auth-overlay">
+  <div class="glass-panel" id="login-box">
+    <h2 style="color:var(--primary); margin-bottom:20px; text-shadow:0 0 10px var(--primary);">SYSTEM_LOGIN</h2>
+    <div id="login-form">
+      <input type="text" id="l-user" placeholder="Username (Empty for Guest)">
+      <input type="password" id="l-pass" placeholder="Password">
+      <button class="auth-btn" onclick="attemptLogin()">CONNECT</button>
+      <p style="font-size:0.8rem; color:#888; margin-top:15px; cursor:pointer;" onclick="toggleForms()">Create Identity ></p>
+    </div>
+    <div id="register-form" style="display:none;">
+      <input type="text" id="r-user" placeholder="New Username">
+      <input type="password" id="r-pass" placeholder="Set Password">
+      <input type="password" id="r-key" class="dev-key-input" placeholder="Root Key (Optional)">
+      <button class="auth-btn" onclick="attemptRegister()">REGISTER</button>
+      <p style="font-size:0.8rem; color:#888; margin-top:15px; cursor:pointer;" onclick="toggleForms()">< Back to Login</p>
+    </div>
+    <div id="error-msg" style="color:var(--alert); font-size:0.8rem; min-height:20px; margin-top:15px; font-weight:bold;"></div>
+  </div>
+</div>
+
+<!-- ONLINE LOBBY MODAL -->
+<div id="online-modal">
+  <div class="lobby-box">
+    <h2 style="color:var(--primary); margin-bottom:20px;">NETWORK LOBBY</h2>
+    
+    <!-- Main Choice -->
+    <div id="lobby-choice">
+      <button class="dev-btn" style="margin-bottom:15px; font-size:1rem;" onclick="setupOnlineGame('create')">CREATE ROOM</button>
+      <button class="dev-btn" style="font-size:1rem;" onclick="setupOnlineGame('join')">JOIN ROOM</button>
+      <button class="mode-btn" style="margin-top:20px;" onclick="closeOnlineLobby()">CANCEL</button>
+    </div>
+
+    <!-- Create Screen -->
+    <div id="lobby-create" style="display:none;">
+      <p>SHARE THIS CODE:</p>
+      <div class="lobby-code-display" id="host-code">...</div>
+      <p style="font-size:0.8rem; color:#aaa;">WAITING FOR OPPONENT...</p>
+      <button class="mode-btn" onclick="resetLobby()">BACK</button>
+    </div>
+
+    <!-- Join Screen -->
+    <div id="lobby-join" style="display:none;">
+      <p>ENTER 6-DIGIT CODE:</p>
+      <input type="text" id="join-code-input" class="lobby-input" placeholder="000000" maxlength="6">
+      <button class="dev-btn" onclick="joinOnlineGame()">CONNECT</button>
+      <button class="mode-btn" style="margin-top:15px;" onclick="resetLobby()">BACK</button>
+    </div>
+  </div>
+</div>
+
+<!-- GAME INTERFACE -->
+<div class="game-wrapper">
+  <div class="game-container" id="game-ui">
+    <div class="status-bar">
+      <span id="player-display">USER: GUEST</span>
+      <button class="mode-btn" id="mode-toggle" onclick="openModeSelect()">MODE: VS AI</button>
+    </div>
+    
+    <div class="status-bar" style="margin-top: -10px;">
+      <span id="ai-stat-container">INTEL: <span id="ai-intel-disp">50%</span></span>
+      <span class="history-link" onclick="openHistory()">VIEW LOGS</span>
+      <span style="margin-left:auto;">PWR: <span id="battery-level">--%</span></span>
+    </div>
+
+    <div class="board" id="board">
+      <div class="replay-overlay" id="replay-overlay"><div class="overlay-text">WATCHING REPLAY...</div></div>
+      <div class="online-overlay" id="waiting-overlay"><div class="overlay-text">OPPONENT TURN...</div></div>
+      
+      <div class="cell" onclick="move(0)"></div>
+      <div class="cell" onclick="move(1)"></div>
+      <div class="cell" onclick="move(2)"></div>
+      <div class="cell" onclick="move(3)"></div>
+      <div class="cell" onclick="move(4)"></div>
+      <div class="cell" onclick="move(5)"></div>
+      <div class="cell" onclick="move(6)"></div>
+      <div class="cell" onclick="move(7)"></div>
+      <div class="cell" onclick="move(8)"></div>
+    </div>
+  </div>
+</div>
+
+<!-- HISTORY MODAL -->
+<div id="history-modal">
+  <h2 style="color:var(--primary);">history</h2>
+  <div class="history-list" id="history-list-container"></div>
+  <button class="mode-btn" style="margin-top:20px;" onclick="closeHistory()">CLOSE</button>
+</div>
+
+<!-- DEV PANEL -->
+<div id="dev-panel">
+  <div class="dev-header">ROOT_ACCESS</div>
+  <div class="dev-content">
+    <div class="dev-section">
+      <span class="dev-label">bg color</span>
+      <div class="color-picker-wrapper">
+        <input type="color" id="theme-picker" value="#d900ff" oninput="updateTheme(this.value)">
+        <span style="font-size:0.8rem; color:#fff; margin-left:10px;" id="hex-disp">#D900FF</span>
+      </div>
+    </div>
+    <div class="dev-section">
+      <span class="dev-label">AI smartness</span>
+      <input type="range" min="0" max="1" step="0.01" class="dev-slider" id="dev-ai-slider" oninput="devUpdateAI(this.value)">
+      <div style="display:flex; justify-content:space-between; color:var(--primary); font-size:0.7rem;">
+        <span>0%</span><span id="dev-ai-val">50%</span><span>100%</span>
+      </div>
+    </div>
+    <div class="console-wrapper" style="flex-grow:2;">
+      <span class="dev-label" style="color:#888;">STREAM</span>
+      <div id="neural-log"><div class="log-dim">> WAITING FOR SIGNAL...</div></div>
+    </div>
+    <div class="dev-section" style="border-bottom:none;">
+      <span class="dev-label">SYSTEM OVERRIDES</span>
+      <button class="dev-btn" onclick="devForceWin()">FORCE WIN</button>
+      <button class="dev-btn" style="margin-top:10px;" onclick="devResetAI()">WIPE MEMORY</button>
+    </div>
+  </div>
+  <button class="dev-btn" style="border-color:var(--alert); color:var(--alert); margin-top:auto;" onclick="exitDevMode()">DISCONNECT</button>
+</div>
+
+<!-- WIN MODAL -->
+<div id="win-modal">
+  <h1 id="win-text" style="font-size:3rem; color:var(--primary); text-shadow:0 0 20px var(--primary); text-align:center;"></h1>
+  <button class="mode-btn" style="font-size:1.2rem; padding:15px 40px; margin-top:20px;" onclick="resetGame()">Restart</button>
+</div>
+
+<script>
+const DB_KEY = "cybertoe_net_v13";
+const DEV_PASS = "vusyooooisthebest";
+let currentUser = null;
+let isDevMode = false;
+let isReplay = false;
+
+// --- ONLINE VARS ---
+let peer = null;
+let conn = null;
+let onlineId = null;
+let isOnline = false;
+let myRole = null; // 'X' (Host) or 'O' (Joiner)
+
+// --- 1. THEME ENGINE ---
+function updateTheme(hex) {
+  document.documentElement.style.setProperty('--primary', hex);
+  document.documentElement.style.setProperty('--secondary', hex); 
+  document.documentElement.style.setProperty('--glass-border', hex);
+  document.getElementById('hex-disp').innerText = hex.toUpperCase();
+}
+
+// --- 2. NEURAL LOGGING ---
+function logThought(msg, type='info') {
+  if(!isDevMode) return;
+  const log = document.getElementById('neural-log');
+  const line = document.createElement('div');
+  line.className = `log-${type}`;
+  line.innerText = `> ${msg}`;
+  log.appendChild(line); log.scrollTop = log.scrollHeight;
+}
+
+// --- 3. MATRIX RAIN ---
+const canvas = document.getElementById('matrix-canvas');
+const ctx = canvas.getContext('2d');
+let drops = [];
+function initMatrix() {
+  canvas.width = window.innerWidth; canvas.height = window.innerHeight;
+  drops = Array(Math.floor(canvas.width/20)).fill(1);
+}
+window.addEventListener('resize', initMatrix);
+initMatrix();
+const chars = '01XYT<>FAIL_SYSTEM_ROOT';
+function drawMatrix() {
+  if(!isDevMode) return;
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--primary');
+  ctx.font = '15px monospace';
+  for(let i=0; i<drops.length; i++) {
+    ctx.fillText(chars[Math.floor(Math.random()*chars.length)], i*20, drops[i]*20);
+    if(drops[i]*20 > canvas.height && Math.random() > 0.975) drops[i] = 0;
+    drops[i]++;
+  }
+  requestAnimationFrame(drawMatrix);
+}
+
+// --- 4. STEALTH DEV ---
+window.addEventListener('keydown', (e) => {
+  if (e.key === '\\') {
+    document.getElementById('dev-prompt-modal').style.display = 'flex';
+    document.getElementById('dev-cmd').value = '';
+    document.getElementById('dev-cmd').focus();
+  }
+});
+function closeDevPrompt() { document.getElementById('dev-prompt-modal').style.display = 'none'; }
+function checkDevPass(e) {
+  if (e.key === 'Enter') {
+    if (document.getElementById('dev-cmd').value === DEV_PASS) { activateDevMode(); closeDevPrompt(); }
+    else { document.getElementById('dev-cmd').classList.add('error-shake'); setTimeout(()=>document.getElementById('dev-cmd').classList.remove('error-shake'), 300); }
+  } else if (e.key === 'Escape') closeDevPrompt();
+}
+function activateDevMode() {
+  isDevMode = true; document.body.classList.add('dev-mode');
+  document.getElementById('theme-picker').value = getComputedStyle(document.documentElement).getPropertyValue('--primary').trim();
+  logThought("ROOT ACCESS ESTABLISHED", "success"); drawMatrix(); updateDisplays();
+}
+function exitDevMode() {
+  isDevMode = false; document.body.classList.remove('dev-mode');
+  ctx.clearRect(0, 0, canvas.width, canvas.height); updateTheme('#d900ff');
+}
+function updateDisplays() {
+  if(!currentUser) return;
+  const pct = (currentUser.smartScore * 100).toFixed(0) + "%";
+  document.getElementById('dev-ai-slider').value = currentUser.smartScore;
+  document.getElementById('dev-ai-val').innerText = pct;
+  document.getElementById('ai-intel-disp').innerText = pct;
+}
+function devUpdateAI(val) { if(currentUser) { currentUser.smartScore = parseFloat(val); updateDisplays(); saveUserData(); } }
+function devForceWin() { announce("X WINS"); logThought("FORCE WIN", "warn"); }
+function devResetAI() { if(currentUser) { currentUser.smartScore = 0.5; devUpdateAI(0.5); logThought("MEMORY FLUSHED", "danger"); } }
+
+// --- 5. AUTH ---
+function getAllUsers() { return JSON.parse(localStorage.getItem(DB_KEY)) || {}; }
+function toggleForms() {
+  const l = document.getElementById('login-form'), r = document.getElementById('register-form');
+  document.getElementById('error-msg').innerText = "";
+  if(l.style.display === 'none') { l.style.display = 'block'; r.style.display = 'none'; }
+  else { l.style.display = 'none'; r.style.display = 'block'; }
+}
+function attemptLogin() {
+  const u = document.getElementById('l-user').value.trim(), p = document.getElementById('l-pass').value.trim();
+  const db = getAllUsers();
+  if (u === "" && p === "") { currentUser = { username: "GUEST", smartScore: 0.5, isDev: false, matchHistory: [] }; unlockGame(); return; }
+  if (db[u] && db[u].password === p) { 
+    currentUser = db[u]; if(!currentUser.matchHistory) currentUser.matchHistory=[]; unlockGame(); 
+    if (currentUser.isDev) activateDevMode(); 
+  } else { 
+    const b = document.getElementById('login-box'); b.style.borderColor = "red"; 
+    document.getElementById('error-msg').innerText = "ACCESS DENIED: INVALID CREDENTIALS";
+    setTimeout(()=>b.style.borderColor="var(--primary)",500); 
+  }
+}
+function attemptRegister() {
+  const u = document.getElementById('r-user').value.trim(), p = document.getElementById('r-pass').value.trim(), k = document.getElementById('r-key').value.trim();
+  const db = getAllUsers();
+  if (db[u] || u.length < 3) { alert("Invalid User"); return; }
+  const isDev = (k === DEV_PASS);
+  db[u] = { username: u, password: p, smartScore: 0.5, isDev: isDev, matchHistory: [] };
+  localStorage.setItem(DB_KEY, JSON.stringify(db)); currentUser = db[u]; unlockGame();
+  if (isDev) setTimeout(() => activateDevMode(), 500);
+}
+function unlockGame() {
+  document.getElementById('auth-overlay').style.display = 'none';
+  document.getElementById('game-ui').style.opacity = 1; document.getElementById('game-ui').style.pointerEvents = 'all';
+  document.getElementById('player-display').innerText = `USER: ${currentUser.username.toUpperCase()}`;
+  updateDisplays(); initAudio();
+}
+function saveUserData() {
+  if(!currentUser || currentUser.username === "GUEST") return;
+  const db = getAllUsers(); db[currentUser.username] = currentUser;
+  localStorage.setItem(DB_KEY, JSON.stringify(db));
+}
+
+// --- 6. ONLINE SYSTEM ---
+function openModeSelect() {
+  if(confirm("Switch Mode? Current game will reset.")) {
+    resetGame();
+    if(isOnline) { // Disconnect if currently online
+      if(conn) conn.close();
+      isOnline = false; myRole = null;
+    }
+    // Show choice
+    const mode = prompt("Type '1' for VS AI\nType '2' for LOCAL 2-PLAYER\nType '3' for ONLINE LOBBY", "1");
+    if(mode === '1') { gameMode = 'ai'; document.getElementById('mode-toggle').innerText = "MODE: VS AI"; }
+    else if(mode === '2') { gameMode = 'local'; document.getElementById('mode-toggle').innerText = "MODE: 2 PLAYER"; }
+    else if(mode === '3') { document.getElementById('online-modal').style.display = 'flex'; }
+  }
+}
+
+function closeOnlineLobby() { document.getElementById('online-modal').style.display = 'none'; }
+function resetLobby() {
+  document.getElementById('lobby-choice').style.display = 'block';
+  document.getElementById('lobby-create').style.display = 'none';
+  document.getElementById('lobby-join').style.display = 'none';
+}
+
+function setupOnlineGame(type) {
+  document.getElementById('lobby-choice').style.display = 'none';
+  if(type === 'create') {
+    // Generate 6 digit code
+    const code = Math.floor(100000 + Math.random() * 900000);
+    onlineId = `cybertoe-v13-${code}`;
+    document.getElementById('host-code').innerText = code;
+    document.getElementById('lobby-create').style.display = 'block';
+    
+    peer = new Peer(onlineId);
+    peer.on('open', (id) => console.log('My peer ID is: ' + id));
+    peer.on('connection', (c) => {
+      conn = c;
+      myRole = 'X';
+      setupConnection();
+      conn.send({ type: 'START', opponent: currentUser.username });
+      startGameOnline();
+    });
+  } else {
+    document.getElementById('lobby-join').style.display = 'block';
+  }
+}
+
+function joinOnlineGame() {
+  const code = document.getElementById('join-code-input').value;
+  if(code.length !== 6) { alert("Invalid Code"); return; }
+  
+  const targetId = `cybertoe-v13-${code}`;
+  peer = new Peer(); // Auto ID for joiner
+  peer.on('open', () => {
+    conn = peer.connect(targetId);
+    conn.on('open', () => {
+      myRole = 'O';
+      setupConnection();
+      conn.send({ type: 'START', opponent: currentUser.username });
+      startGameOnline();
+    });
+  });
+}
+
+function setupConnection() {
+  conn.on('data', (data) => {
+    if(data.type === 'MOVE') {
+      handleNetworkMove(data.index, data.player);
+    } else if (data.type === 'START') {
+      document.getElementById('player-display').innerText = `VS: ${data.opponent.toUpperCase()}`;
+    } else if (data.type === 'RESET') {
+      resetBoardVisuals();
+    }
+  });
+}
+
+function startGameOnline() {
+  isOnline = true; gameMode = 'online';
+  document.getElementById('online-modal').style.display = 'none';
+  document.getElementById('mode-toggle').innerText = "MODE: ONLINE";
+  resetGame();
+}
+
+function handleNetworkMove(idx, p) {
+  makeMove(idx, p);
+  document.getElementById('waiting-overlay').style.display = 'none'; // Unblock UI
+}
+
+// --- 7. GAME ENGINE ---
+let board = Array(9).fill(null);
+let active = true; let audioCtx = null; let gameMode = 'ai'; let currentMoves = [];
+function initAudio() { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+function playSfx(freq, type) {
+  if (!audioCtx) return;
+  const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+  osc.type = type; osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.2);
+  osc.connect(gain); gain.connect(audioCtx.destination);
+  osc.start(); osc.stop(audioCtx.currentTime + 0.2);
+}
+function toggleMode() { if(!isOnline) openModeSelect(); } // Reuse select for consistency
+
+function move(idx) {
+  if (!active || board[idx] || isReplay) return;
+  
+  // ONLINE LOGIC
+  if (isOnline) {
+    let currentTurn = board.filter(x => x).length % 2 === 0 ? 'X' : 'O';
+    if (currentTurn !== myRole) return; // Not your turn
+    
+    makeMove(idx, myRole);
+    conn.send({ type: 'MOVE', index: idx, player: myRole });
+    document.getElementById('waiting-overlay').style.display = 'flex'; // Block UI
+    return;
+  }
+
+  // OFFLINE LOGIC
+  if (gameMode === 'ai') {
+    makeMove(idx, 'X');
+    if (active) { active = false; setTimeout(() => { makeMove(getAiMove(), 'O'); active = true; }, 400); }
+  } else { makeMove(idx, board.filter(x => x).length % 2 === 0 ? 'X' : 'O'); }
+}
+
+function makeMove(idx, p) {
+  board[idx] = p; currentMoves.push({index: idx, player: p});
+  const cell = document.querySelectorAll('.cell')[idx];
+  cell.innerText = p; cell.className = `cell ${p.toLowerCase()}`;
+  playSfx(p==='X'?600:300, 'square');
+  if(p==='O' && isDevMode) logThought(`EXECUTING MOVE -> [${idx}]`, "success");
+  if (checkWin(p)) announce(`${p} WINS`);
+  else if (!board.includes(null)) announce("DRAW");
+}
+
+// --- AI LOGIC ---
+function getAiMove() {
+  let diff = currentUser ? currentUser.smartScore : 0.5;
+  logThought("--------------------------", "dim");
+  logThought(`STARTING TURN | INTEL: ${(diff*100).toFixed(0)}%`, "info");
+  if (Math.random() > diff) {
+    logThought(`>> ERROR CHECK: FAILED`, "warn");
+    let avail = board.map((v, i) => v ? null : i).filter(v => v !== null);
+    return avail[Math.floor(Math.random()*avail.length)];
+  }
+  logThought(`>> MINIMAX SCANNING...`, "info");
+  let avail = board.map((v, i) => v ? null : i).filter(v => v !== null);
+  let bestScore = -Infinity; let bestMove = avail[0];
+  for (let i of avail) {
+    board[i] = 'O'; let score = minimax(board, 'X').score; board[i] = null; 
+    let type = score > 0 ? "success" : score < 0 ? "danger" : "info";
+    logThought(`[NODE ${i}] EVAL: ${score}`, type);
+    if (score > bestScore) { bestScore = score; bestMove = i; }
+  }
+  return bestMove;
+}
+function minimax(newBoard, player) {
+  let avail = newBoard.map((v, i) => v ? null : i).filter(v => v !== null);
+  if (checkWin('X', newBoard)) return {score: -10};
+  if (checkWin('O', newBoard)) return {score: 10};
+  if (avail.length === 0) return {score: 0};
+  let moves = [];
+  for (let i of avail) {
+    let m = {index: i}; newBoard[i] = player;
+    if (player === 'O') m.score = minimax(newBoard, 'X').score;
+    else m.score = minimax(newBoard, 'O').score;
+    newBoard[i] = null; moves.push(m);
+  }
+  let bestMove;
+  if (player === 'O') {
+    let bestScore = -10000;
+    for(let i=0; i<moves.length; i++) { if(moves[i].score > bestScore) { bestScore = moves[i].score; bestMove = i; } }
+  } else {
+    let bestScore = 10000;
+    for(let i=0; i<moves.length; i++) { if(moves[i].score < bestScore) { bestScore = moves[i].score; bestMove = i; } }
+  }
+  return moves[bestMove];
+}
+function checkWin(p, b=board) {
+  const wins = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+  return wins.some(c => b[c[0]] === p && b[c[1]] === p && b[c[2]] === p);
+}
+
+function announce(res) {
+  active = false;
+  document.getElementById('win-text').innerText = res;
+  document.getElementById('win-modal').style.display = 'flex';
+  if(currentUser && gameMode === 'ai' && !isDevMode && currentUser.username !== "GUEST") {
+    if(res === "X WINS") currentUser.smartScore = Math.min(1, currentUser.smartScore + 0.1);
+    else if(res === "O WINS") currentUser.smartScore = Math.max(0, currentUser.smartScore - 0.05);
+    if(!currentUser.matchHistory) currentUser.matchHistory = [];
+    currentUser.matchHistory.push({ timestamp: new Date().toLocaleTimeString(), result: res, moves: [...currentMoves] });
+    saveUserData(); updateDisplays();
+  }
+  if (isDevMode) logThought(`MATCH ENDED: ${res}`, res.includes('X') ? "danger" : "success");
+}
+
+function resetGame() {
+  if(isOnline && conn && conn.open && !isReplay) {
+    conn.send({ type: 'RESET' });
+  }
+  resetBoardVisuals();
+}
+
+function resetBoardVisuals() {
+  board.fill(null); currentMoves = [];
+  document.querySelectorAll('.cell').forEach(c => { c.innerText = ''; c.className = 'cell'; });
+  document.getElementById('win-modal').style.display = 'none';
+  document.getElementById('waiting-overlay').style.display = 'none';
+  
+  // If online, respect turn order
+  if(isOnline && myRole === 'O') {
+    document.getElementById('waiting-overlay').style.display = 'flex';
+  }
+  if(!isReplay) active = true;
+}
+
+if ('getBattery' in navigator) {
+  navigator.getBattery().then(b => { document.getElementById('battery-level').innerText = `${(b.level*100).toFixed(0)}%`; });
+}
+    // --- 8. HISTORY & REPLAY SYSTEM ---
+function openHistory() {
+    const modal = document.getElementById('history-modal');
+    const container = document.getElementById('history-list-container');
+    container.innerHTML = '';
+
+    if (!currentUser || !currentUser.matchHistory || currentUser.matchHistory.length === 0) {
+        container.innerHTML = '<div style="text-align:center; padding:20px; color:#666;">NO FLIGHT DATA FOUND</div>';
+    } else {
+        // Show last 20 matches
+        const history = [...currentUser.matchHistory].reverse().slice(0, 20);
+        history.forEach((match, index) => {
+            const item = document.createElement('div');
+            item.className = 'history-item';
+            item.innerHTML = `
+                <span>${match.timestamp}</span>
+                <span style="color:${match.result.includes('X') ? 'var(--primary)' : 'var(--alert)'}">${match.result}</span>
+            `;
+            item.onclick = () => runReplay(match.moves);
+            container.appendChild(item);
+        });
+    }
+    modal.style.display = 'flex';
+}
+
+function closeHistory() {
+    document.getElementById('history-modal').style.display = 'none';
+}
+
+async function runReplay(moves) {
+    closeHistory();
+    resetBoardVisuals();
+    isReplay = true;
+    active = false;
+    document.getElementById('replay-overlay').style.display = 'flex';
+
+    for (const move of moves) {
+        await new Promise(r => setTimeout(r, 600));
+        board[move.index] = move.player;
+        const cell = document.querySelectorAll('.cell')[move.index];
+        cell.innerText = move.player;
+        cell.className = `cell ${move.player.toLowerCase()}`;
+        playSfx(move.player === 'X' ? 600 : 300, 'square');
+    }
+
+    await new Promise(r => setTimeout(r, 1000));
+    document.getElementById('replay-overlay').style.display = 'none';
+    isReplay = false;
+    resetGame();
+}
+
+// --- 9. BATTERY INITIALIZATION ---
+if ('getBattery' in navigator) {
+    navigator.getBattery().then(b => {
+        const update = () => {
+            document.getElementById('battery-level').innerText = `${(b.level * 100).toFixed(0)}%`;
+        };
+        update();
+        b.addEventListener('levelchange', update);
+    });
+}
+
+</script>
+</body>
+</html>
